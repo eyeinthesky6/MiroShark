@@ -1,5 +1,7 @@
 name: Codex Coordinator open-source experiment
 
+# Manual or branch-push execution; secrets remain in GitHub Actions.
+
 on:
   workflow_dispatch:
     inputs:
