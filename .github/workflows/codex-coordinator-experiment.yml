@@ -1,0 +1,159 @@
+name: Codex Coordinator open-source experiment
+
+# Manual or branch-push execution; secrets remain in GitHub Actions.
+
+on:
+  workflow_dispatch:
+    inputs:
+      rounds:
+        description: Simulation rounds
+        required: true
+        default: "2"
+  push:
+    branches:
+      - chatgpt/codex-coordinator-simulation
+    paths:
+      - .github/workflows/codex-coordinator-experiment.yml
+
+permissions:
+  contents: read
+
+jobs:
+  simulate:
+    name: Run MiroShark experiment
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    services:
+      neo4j:
+        image: neo4j:5.26-community
+        env:
+          NEO4J_AUTH: neo4j/miroshark-actions-password
+          NEO4J_server_jvm_additional: --add-modules jdk.incubator.vector
+        ports:
+          - 7474:7474
+          - 7687:7687
+        options: >-
+          --health-cmd "wget --spider --quiet http://localhost:7474/"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+          --health-start-period 30s
+
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      LLM_PROVIDER: openai
+      LLM_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      LLM_BASE_URL: https://openrouter.ai/api/v1
+      LLM_MODEL_NAME: google/gemini-2.5-flash-lite
+      SMART_PROVIDER: openai
+      SMART_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      SMART_BASE_URL: https://openrouter.ai/api/v1
+      SMART_MODEL_NAME: google/gemini-2.5-flash
+      NER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      NER_BASE_URL: https://openrouter.ai/api/v1
+      NER_MODEL_NAME: google/gemini-2.5-flash-lite
+      WONDERWALL_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      WONDERWALL_BASE_URL: https://openrouter.ai/api/v1
+      WONDERWALL_MODEL_NAME: google/gemini-2.5-flash-lite
+      OPENAI_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENAI_API_BASE_URL: https://openrouter.ai/api/v1
+      EMBEDDING_PROVIDER: openai
+      EMBEDDING_MODEL: openai/text-embedding-3-small
+      EMBEDDING_BASE_URL: https://openrouter.ai/api
+      EMBEDDING_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      EMBEDDING_DIMENSIONS: "768"
+      NEO4J_URI: bolt://localhost:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: miroshark-actions-password
+      MIROSHARK_INTERNAL_KEY: actions-experiment-internal-key
+      FLASK_DEBUG: "false"
+      RERANKER_ENABLED: "false"
+      WEB_ENRICHMENT_ENABLED: "false"
+      ENTITY_RESOLUTION_USE_LLM: "false"
+      CONTRADICTION_DETECTION_ENABLED: "false"
+      DEMOGRAPHICS_COUNTRY: ""
+      REPORT_AGENT_MAX_TOOL_CALLS: "3"
+      REPORT_AGENT_MAX_REFLECTION_ROUNDS: "1"
+      WONDERWALL_DEFAULT_MAX_ROUNDS: "2"
+      EXPERIMENT_ROUNDS: ${{ inputs.rounds || '2' }}
+      EXPERIMENT_OUTPUT: ${{ github.workspace }}/experiment_output
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Check out fork
+        uses: actions/checkout@v4
+
+      - name: Verify OpenRouter secret is present
+        shell: bash
+        run: |
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "OPENROUTER_API_KEY is not configured as a repository Actions secret."
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install backend
+        run: uv sync --project backend
+
+      - name: Start MiroShark backend
+        shell: bash
+        run: |
+          uv run --project backend python backend/run.py > backend.log 2>&1 &
+          echo $! > backend.pid
+          for attempt in $(seq 1 60); do
+            if curl --silent --output /dev/null http://127.0.0.1:5001/api/graph/project/nonexistent; then
+              echo "MiroShark backend is reachable."
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Backend did not become reachable."
+          tail -n 200 backend.log
+          exit 1
+
+      - name: Run decision experiment
+        run: uv run --project backend python backend/scripts/run_codex_coordinator_experiment.py
+
+      - name: Add report to run summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f experiment_output/06_report.md ]; then
+            {
+              echo "# Codex Coordinator open-source simulation"
+              echo
+              echo "> Synthetic MiroShark output; this is decision support, not observed evidence."
+              echo
+              cat experiment_output/06_report.md
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "# Experiment did not produce a final report"
+              echo
+              echo "Inspect the uploaded backend and experiment logs."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Capture backend log
+        if: always()
+        run: cp backend.log experiment_output/backend.log 2>/dev/null || true
+
+      - name: Upload experiment artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-coordinator-open-source-experiment
+          path: experiment_output/
+          if-no-files-found: warn
+          retention-days: 30
