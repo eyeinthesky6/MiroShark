@@ -30,6 +30,19 @@ e2e.SIMULATION_REQUIREMENT = (
 )
 e2e.MAX_SIM_ROUNDS = int(os.environ.get("EXPERIMENT_ROUNDS", "2"))
 e2e.ENABLE_POLYMARKET = False
+
+# Production mode protects internal API routes. Attach the CI-only key to every
+# request without ever writing the OpenRouter credential to disk or output.
+_internal_key = os.environ.get("MIROSHARK_INTERNAL_KEY", "")
+if _internal_key:
+    _original_request = e2e.requests.request
+
+    def _authenticated_request(method, url, **kwargs):
+        headers = dict(kwargs.pop("headers", {}) or {})
+        headers["X-MiroShark-Internal-Key"] = _internal_key
+        return _original_request(method, url, headers=headers, **kwargs)
+
+    e2e.requests.request = _authenticated_request
 e2e.OUT_DIR = os.path.abspath(
     os.environ.get("EXPERIMENT_OUTPUT", os.path.join(repo_root, "experiment_output"))
 )
