@@ -11,6 +11,7 @@ on:
         default: "2"
   push:
     branches:
+      - main
       - chatgpt/codex-coordinator-simulation
     paths:
       - .github/workflows/codex-coordinator-experiment.yml
